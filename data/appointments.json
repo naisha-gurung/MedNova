@@ -1,0 +1,11 @@
+[
+  {
+    "id": "A001",
+    "patientId": "P001",
+    "doctorId": "D001",
+    "date": "2024-02-10",
+    "time": "10:00 AM",
+    "status": "Scheduled",
+    "reason": "Chest Pain"
+  }
+]

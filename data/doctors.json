@@ -1,0 +1,18 @@
+[
+  {
+    "id": "D001",
+    "name": "Dr. Anil Kumar",
+    "specialization": "Cardiology",
+    "phone": "9811122233",
+    "email": "anil@hospital.com",
+    "available": true
+  },
+  {
+    "id": "D002",
+    "name": "Dr. Meena Gupta",
+    "specialization": "Neurology",
+    "phone": "9844455566",
+    "email": "meena@hospital.com",
+    "available": true
+  }
+]

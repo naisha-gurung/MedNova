@@ -1,0 +1,22 @@
+[
+  {
+    "id": "P001",
+    "name": "Rahul Sharma",
+    "age": 35,
+    "gender": "Male",
+    "phone": "9876543210",
+    "address": "Dharamsala, HP",
+    "bloodGroup": "O+",
+    "createdAt": "2024-01-15"
+  },
+  {
+    "id": "P002",
+    "name": "Priya Verma",
+    "age": 28,
+    "gender": "Female",
+    "phone": "9812345678",
+    "address": "Shimla, HP",
+    "bloodGroup": "A+",
+    "createdAt": "2024-01-20"
+  }
+]
