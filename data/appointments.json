@@ -7,5 +7,14 @@
     "time": "10:00 AM",
     "status": "Scheduled",
     "reason": "Chest Pain"
+  },
+  {
+    "id": "A002",
+    "patientId": "P003",
+    "doctorId": "D003",
+    "date": "2026-03-12",
+    "time": "4:00 PM",
+    "status": "Scheduled",
+    "reason": "fever"
   }
 ]

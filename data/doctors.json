@@ -14,5 +14,13 @@
     "phone": "9844455566",
     "email": "meena@hospital.com",
     "available": true
+  },
+  {
+    "id": "D003",
+    "name": "Dr. Mustakim ",
+    "specialization": "Cardiology",
+    "phone": "1234567890",
+    "email": "doctor@hospital.com",
+    "available": true
   }
 ]
