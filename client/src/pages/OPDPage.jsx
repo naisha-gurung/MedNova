@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
@@ -63,7 +63,6 @@ function OPDModal({ onClose, onSaved }) {
               <textarea className="form-control" rows={2} value={form.chiefComplaint} onChange={e => setForm(f => ({ ...f, chiefComplaint: e.target.value }))} required placeholder="Main reason for visit..." style={{ resize: 'vertical' }} />
             </div>
 
-            {/* Vitals */}
             <div style={{ padding: '14px', background: 'var(--gray-50)', borderRadius: 'var(--radius)', marginBottom: '16px' }}>
               <div style={{ fontWeight: '700', fontSize: '0.8rem', color: 'var(--gray-600)', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.05em' }}>📊 Vitals</div>
               <div className="grid-3" style={{ gap: '12px' }}>
@@ -121,6 +120,23 @@ function OPDModal({ onClose, onSaved }) {
   );
 }
 
+// Derive OPD status from appointment time (client-side, mirrors server logic)
+function deriveStatus(record) {
+  if (!record.appointment || !record.appointment.date || !record.appointment.timeSlot) return record.status;
+  const slot = record.appointment.timeSlot;
+  const [time, meridiem] = slot.split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (meridiem === 'PM' && hours !== 12) hours += 12;
+  if (meridiem === 'AM' && hours === 12) hours = 0;
+  const apptTime = new Date(record.appointment.date);
+  apptTime.setHours(hours, minutes, 0, 0);
+  const now = new Date();
+  const diffMs = now - apptTime;
+  if (diffMs < 0) return 'waiting';
+  if (diffMs <= 60 * 60 * 1000) return 'in-progress';
+  return 'completed';
+}
+
 export default function OPDPage() {
   const { user } = useAuth();
   const [records, setRecords] = useState([]);
@@ -129,6 +145,7 @@ export default function OPDPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [dateFilter, setDateFilter] = useState('');
+  const refreshRef = useRef(null);
 
   const canEdit = ['admin', 'doctor', 'nurse', 'receptionist'].includes(user?.role);
 
@@ -146,6 +163,12 @@ export default function OPDPage() {
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
 
+  // Auto-refresh every 60 seconds to pick up status changes
+  useEffect(() => {
+    refreshRef.current = setInterval(() => { fetchRecords(); }, 60000);
+    return () => clearInterval(refreshRef.current);
+  }, [fetchRecords]);
+
   const updateStatus = async (id, status) => {
     try {
       await api.put(`/opd/${id}`, { status });
@@ -154,12 +177,27 @@ export default function OPDPage() {
     } catch { toast.error('Failed to update'); }
   };
 
-  const filtered = records.filter(r =>
+  // Apply client-side derived status for display
+  const displayRecords = records.map(r => ({
+    ...r,
+    status: r.appointment ? deriveStatus(r) : r.status,
+  }));
+
+  const filtered = displayRecords.filter(r =>
     !search || r.patient?.name?.toLowerCase().includes(search.toLowerCase()) ||
     r.chiefComplaint?.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Re-filter after deriving status
+  const finalFiltered = statusFilter
+    ? filtered.filter(r => r.status === statusFilter)
+    : filtered;
+
   const statusDot = { waiting: '#d97706', 'in-progress': '#1a56db', completed: '#059669' };
+
+  // Count using derived statuses
+  const counts = { waiting: 0, 'in-progress': 0, completed: 0 };
+  displayRecords.forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++; });
 
   return (
     <div>
@@ -170,16 +208,13 @@ export default function OPDPage() {
 
       {/* Status summary */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
-        {['waiting', 'in-progress', 'completed'].map(s => {
-          const count = records.filter(r => r.status === s).length;
-          return (
-            <div key={s} onClick={() => setStatusFilter(statusFilter === s ? '' : s)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'white', padding: '12px 18px', borderRadius: 'var(--radius)', border: `2px solid ${statusFilter === s ? statusDot[s] : 'var(--gray-100)'}`, cursor: 'pointer', transition: 'all 0.15s', boxShadow: 'var(--shadow-sm)' }}>
-              <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: statusDot[s] }} />
-              <span style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--gray-900)' }}>{count}</span>
-              <span style={{ fontSize: '0.8rem', color: 'var(--gray-500)', textTransform: 'capitalize' }}>{s.replace('-', ' ')}</span>
-            </div>
-          );
-        })}
+        {['waiting', 'in-progress', 'completed'].map(s => (
+          <div key={s} onClick={() => setStatusFilter(statusFilter === s ? '' : s)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'white', padding: '12px 18px', borderRadius: 'var(--radius)', border: `2px solid ${statusFilter === s ? statusDot[s] : 'var(--gray-100)'}`, cursor: 'pointer', transition: 'all 0.15s', boxShadow: 'var(--shadow-sm)' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: statusDot[s] }} />
+            <span style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--gray-900)' }}>{counts[s]}</span>
+            <span style={{ fontSize: '0.8rem', color: 'var(--gray-500)', textTransform: 'capitalize' }}>{s.replace('-', ' ')}</span>
+          </div>
+        ))}
       </div>
 
       <div className="filter-bar">
@@ -194,16 +229,16 @@ export default function OPDPage() {
       <div className="card">
         {loading ? (
           <div className="loading-container"><div className="spinner" /></div>
-        ) : filtered.length === 0 ? (
+        ) : finalFiltered.length === 0 ? (
           <div className="empty-state"><div className="icon">🏥</div><h3>No OPD records found</h3></div>
         ) : (
           <div className="table-wrapper">
             <table>
               <thead>
-                <tr><th>Patient</th><th>Doctor</th><th>Chief Complaint</th><th>Vitals</th><th>Visit Time</th><th>Status</th>{canEdit && <th>Actions</th>}</tr>
+                <tr><th>Patient</th><th>Doctor</th><th>Chief Complaint</th><th>Vitals</th><th>Appt. Time</th><th>Visit Time</th><th>Status</th>{canEdit && <th>Actions</th>}</tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
+                {finalFiltered.map(r => (
                   <tr key={r._id}>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -227,10 +262,17 @@ export default function OPDPage() {
                       {r.vitals?.pulse && <div style={{ fontSize: '0.75rem' }}>Pulse: {r.vitals.pulse}</div>}
                       {r.vitals?.temperature && <div style={{ fontSize: '0.75rem' }}>Temp: {r.vitals.temperature}°F</div>}
                     </td>
+                    <td style={{ fontSize: '0.82rem', color: 'var(--gray-500)' }}>
+                      {r.appointment ? (
+                        <span style={{ background: 'var(--primary-50)', padding: '2px 8px', borderRadius: '100px', fontSize: '0.78rem', fontWeight: '600', color: 'var(--primary)' }}>
+                          {r.appointment.timeSlot}
+                        </span>
+                      ) : '—'}
+                    </td>
                     <td style={{ fontSize: '0.82rem', color: 'var(--gray-500)' }}>{formatDateTime(r.visitDate)}</td>
                     <td>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '100px', fontSize: '0.75rem', fontWeight: '700', background: `${statusDot[r.status]}20`, color: statusDot[r.status] }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: statusDot[r.status] }} />
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '100px', fontSize: '0.75rem', fontWeight: '700', background: `${statusDot[r.status] || '#6b7280'}20`, color: statusDot[r.status] || '#6b7280' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: statusDot[r.status] || '#6b7280' }} />
                         {r.status.replace('-', ' ')}
                       </span>
                     </td>

@@ -44,11 +44,7 @@ export default function Topbar({ collapsed, onToggle }) {
 
       {/* Right */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        {/* Notifications placeholder */}
-        <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '8px', borderRadius: '8px', position: 'relative', color: 'var(--gray-500)' }}>
-          🔔
-          <span style={{ position: 'absolute', top: '6px', right: '6px', width: '8px', height: '8px', background: 'var(--danger)', borderRadius: '50%', border: '2px solid white' }} />
-        </button>
+        
 
         {/* Profile */}
         <Link to="/profile" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', padding: '6px 10px', borderRadius: '10px', transition: 'background 0.15s' }}

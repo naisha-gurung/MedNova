@@ -1,8 +1,21 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { formatDate, formatDateTime, formatCurrency } from '../utils/helpers';
+
+// Derive IPD status from admission time:
+// - admitted < 24 hours ago → under-treatment
+// - otherwise stays under-treatment until manually discharged
+function deriveIPDStatus(record) {
+  if (!record || record.status === 'discharged' || record.status === 'transferred') return record.status;
+  const now = new Date();
+  const admissionTime = new Date(record.admissionDate);
+  const diffMs = now - admissionTime;
+  if (diffMs < 0) return 'admitted';
+  if (diffMs <= 24 * 60 * 60 * 1000) return 'under-treatment';
+  return 'under-treatment'; // Still in hospital, keep as under-treatment
+}
 
 function AdmitModal({ onClose, onSaved }) {
   const { user } = useAuth();
@@ -172,6 +185,7 @@ export default function IPDPage() {
 
   const canAdmit = ['admin', 'doctor', 'nurse', 'receptionist'].includes(user?.role);
   const canDischarge = ['admin', 'doctor'].includes(user?.role);
+  const refreshRef = useRef(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -187,6 +201,12 @@ export default function IPDPage() {
   }, [statusFilter]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Auto-refresh every 60 seconds to pick up status transitions
+  useEffect(() => {
+    refreshRef.current = setInterval(() => { fetchData(); }, 60000);
+    return () => clearInterval(refreshRef.current);
+  }, [fetchData]);
 
   const totalBeds = beds.length;
   const occupiedBeds = beds.filter(b => b.isOccupied).length;
@@ -247,7 +267,9 @@ export default function IPDPage() {
                     <tr><th>Patient</th><th>Doctor</th><th>Bed</th><th>Admission Reason</th><th>Admitted</th><th>Status</th><th>Bill</th>{canDischarge && <th>Actions</th>}</tr>
                   </thead>
                   <tbody>
-                    {records.map(r => (
+                    {records.map(r => {
+                      const derivedStatus = deriveIPDStatus(r);
+                      return (
                       <tr key={r._id}>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -269,14 +291,18 @@ export default function IPDPage() {
                         <td style={{ maxWidth: '200px', fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.admissionReason}</td>
                         <td style={{ fontSize: '0.82rem' }}>{formatDate(r.admissionDate)}</td>
                         <td>
-                          <span className={`badge badge-${r.status === 'admitted' ? 'primary' : r.status === 'under-treatment' ? 'warning' : 'gray'}`} style={{ textTransform: 'capitalize' }}>
-                            {r.status.replace('-', ' ')}
+                          <span className={`badge badge-${derivedStatus === 'admitted' ? 'primary' : derivedStatus === 'under-treatment' ? 'warning' : 'gray'}`} style={{ textTransform: 'capitalize' }}>
+                            {derivedStatus.replace('-', ' ')}
                           </span>
+                          {derivedStatus === 'under-treatment' && r.admissionDate && (() => {
+                            const hrs = Math.floor((Date.now() - new Date(r.admissionDate)) / (1000 * 60 * 60));
+                            return <div style={{ fontSize: '0.68rem', color: 'var(--gray-400)', marginTop: '2px' }}>{hrs}h elapsed</div>;
+                          })()}
                         </td>
                         <td style={{ fontWeight: '700' }}>{r.totalBill ? formatCurrency(r.totalBill) : '—'}</td>
                         {canDischarge && (
                           <td>
-                            {r.status !== 'discharged' && (
+                            {derivedStatus !== 'discharged' && (
                               <button onClick={() => setDischargeRecord(r)} className="btn btn-warning btn-sm" style={{ background: 'var(--warning-light)', color: 'var(--warning)', border: '1.5px solid var(--warning)' }}>
                                 Discharge
                               </button>
@@ -284,7 +310,8 @@ export default function IPDPage() {
                           </td>
                         )}
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -5,10 +5,16 @@ const User = require('../models/User');
 const Inventory = require('../models/Inventory');
 const { Bed } = require('../models/IPD');
 
+console.log("ENV URI:", process.env.MONGODB_URI);
+
 const connectDB = async () => {
   await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/mednova');
   console.log('MongoDB connected for seeding...');
+  console.log("Connected DB:", mongoose.connection.name);
+
 };
+
+
 
 const seed = async () => {
   await connectDB();

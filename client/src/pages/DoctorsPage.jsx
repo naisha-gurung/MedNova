@@ -69,8 +69,8 @@ export default function DoctorsPage() {
                 <div style={{ padding: '40px 24px 24px' }}>
                   <div style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--gray-900)', marginBottom: '4px' }}>{doc.name}</div>
                   <div style={{ fontSize: '0.82rem', color: 'var(--primary)', fontWeight: '600', marginBottom: '8px' }}>{doc.specialization}</div>
-                  {doc.department && <div style={{ fontSize: '0.78rem', color: 'var(--gray-400)', marginBottom: '16px' }}>🏥 {doc.department}</div>}
-                  {doc.gender && <div style={{ fontSize: '0.78rem', color: 'var(--gray-500)', marginBottom: '8px', textTransform: 'capitalize' }}>⚧ {doc.gender}</div>}
+                  {doc.department && <div style={{ fontSize: '0.78rem', color: 'var(--gray-400)', marginBottom: '16px' }}>{doc.department}</div>}
+                  {doc.gender && <div style={{ fontSize: '0.78rem', color: 'var(--gray-500)', marginBottom: '8px', textTransform: 'capitalize' }}>{doc.gender}</div>}
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderTop: '1px solid var(--gray-100)', marginTop: '8px' }}>
                     <div>

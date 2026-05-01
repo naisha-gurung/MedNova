@@ -1,13 +1,23 @@
 const Appointment = require('../models/Appointment');
 const User = require('../models/User');
 
+// Helper: parse "09:00 AM" style slot into a Date on a given date string
+function slotToDateTime(dateStr, slot) {
+  const [time, meridiem] = slot.split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (meridiem === 'PM' && hours !== 12) hours += 12;
+  if (meridiem === 'AM' && hours === 12) hours = 0;
+  const d = new Date(dateStr);
+  d.setHours(hours, minutes, 0, 0);
+  return d;
+}
+
 exports.getAppointments = async (req, res) => {
   try {
     const { status, doctorId, patientId, date, page = 1, limit = 20 } = req.query;
     const query = {};
     const { user } = req;
 
-    // Role-based filtering
     if (user.role === 'patient') query.patient = user._id;
     else if (user.role === 'doctor') query.doctor = user._id;
     else {
@@ -60,7 +70,21 @@ exports.getAvailableSlots = async (req, res) => {
       '12:00 PM','12:30 PM','02:00 PM','02:30 PM','03:00 PM','03:30 PM',
       '04:00 PM','04:30 PM','05:00 PM'
     ];
-    const available = allSlots.filter(s => !bookedSlots.includes(s));
+
+    const now = new Date();
+    const isToday = new Date(date).toDateString() === now.toDateString();
+    const isAdmin = req.user && req.user.role === 'admin';
+
+    const available = allSlots.filter(s => {
+      if (bookedSlots.includes(s)) return false;
+      // Filter past slots on today unless admin
+      if (isToday && !isAdmin) {
+        const slotTime = slotToDateTime(date, s);
+        return slotTime > now;
+      }
+      return true;
+    });
+
     res.json({ available, booked: bookedSlots });
   } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -68,16 +92,25 @@ exports.getAvailableSlots = async (req, res) => {
 exports.createAppointment = async (req, res) => {
   try {
     const { doctorId, date, timeSlot, reason, type } = req.body;
+    const isAdmin = req.user && req.user.role === 'admin';
 
-    // Prevent past date
-    if (new Date(date) < new Date().setHours(0,0,0,0)) {
+    // Prevent past DATE booking (admins exempt)
+    if (!isAdmin && new Date(date) < new Date().setHours(0,0,0,0)) {
       return res.status(400).json({ message: 'Cannot book appointment for a past date' });
+    }
+
+    // Prevent past TIME SLOT on today (admins exempt)
+    const isToday = new Date(date).toDateString() === new Date().toDateString();
+    if (!isAdmin && isToday && timeSlot) {
+      const slotTime = slotToDateTime(date, timeSlot);
+      if (slotTime <= new Date()) {
+        return res.status(400).json({ message: 'Cannot book a time slot that has already passed' });
+      }
     }
 
     const doctor = await User.findById(doctorId);
     if (!doctor || doctor.role !== 'doctor') return res.status(404).json({ message: 'Doctor not found' });
 
-    // Check double booking
     const d = new Date(date);
     const conflict = await Appointment.findOne({
       doctor: doctorId,
@@ -117,13 +150,10 @@ exports.processPayment = async (req, res) => {
   try {
     const appt = await Appointment.findById(req.params.id);
     if (!appt) return res.status(404).json({ message: 'Appointment not found' });
-
-    // Placeholder payment processing
     appt.paymentStatus = 'paid';
     appt.paymentId = `PAY_${Date.now()}`;
     appt.status = 'confirmed';
     await appt.save();
-
     res.json({ appointment: appt, message: 'Payment successful. Appointment confirmed.' });
   } catch (err) { res.status(500).json({ message: err.message }); }
 };

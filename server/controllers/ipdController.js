@@ -1,4 +1,35 @@
 const { IPD, Bed } = require('../models/IPD');
+const Appointment = require('../models/Appointment');
+
+// Helper: parse "09:00 AM" style slot into a Date
+function slotToDateTime(dateStr, slot) {
+  const [time, meridiem] = slot.split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (meridiem === 'PM' && hours !== 12) hours += 12;
+  if (meridiem === 'AM' && hours === 12) hours = 0;
+  const d = new Date(dateStr);
+  d.setHours(hours, minutes, 0, 0);
+  return d;
+}
+
+// Derive IPD status from appointment:
+// - future appointment: admitted (waiting)
+// - within 24 hours of admission: under-treatment
+// - more than 24 hours: stays under-treatment until discharged manually
+// Logic based on admissionDate (when actually admitted):
+// - admitted < 24 hours ago: under-treatment
+// - If linked to appointment and slot is in the future: admitted
+function deriveIPDStatus(record) {
+  if (!record || record.status === 'discharged') return null;
+  const now = new Date();
+  const admissionTime = new Date(record.admissionDate);
+  const diffMs = now - admissionTime;
+
+  if (diffMs < 0) return 'admitted';                           // future admission
+  if (diffMs <= 24 * 60 * 60 * 1000) return 'under-treatment'; // within 24 hours
+  // More than 24 hours: keep as under-treatment (still in hospital)
+  return 'under-treatment';
+}
 
 exports.getAllBeds = async (req, res) => {
   try {
@@ -39,11 +70,30 @@ exports.getAllIPD = async (req, res) => {
     const records = await IPD.find(query)
       .populate('patient', 'name email phone gender bloodGroup profilePicture')
       .populate('doctor', 'name specialization')
-      .populate('bed', 'bedNumber ward type')
+      .populate('bed', 'bedNumber ward type dailyCharge')
       .sort('-admissionDate')
       .skip((page - 1) * limit)
       .limit(Number(limit));
-    res.json({ records, total });
+
+    // Auto-derive and update status for non-discharged records
+    const updatedRecords = await Promise.all(records.map(async (r) => {
+      const rObj = r.toObject();
+      if (r.status !== 'discharged' && r.status !== 'transferred') {
+        const derived = deriveIPDStatus(r);
+        if (derived && r.status !== derived) {
+          await IPD.findByIdAndUpdate(r._id, { status: derived });
+          rObj.status = derived;
+        }
+      }
+      return rObj;
+    }));
+
+    // Re-filter after status update
+    const finalRecords = status
+      ? updatedRecords.filter(r => r.status === status)
+      : updatedRecords;
+
+    res.json({ records: finalRecords, total });
   } catch (err) { res.status(500).json({ message: err.message }); }
 };
 
@@ -65,9 +115,9 @@ exports.admitPatient = async (req, res) => {
     if (!bed) return res.status(404).json({ message: 'Bed not found' });
     if (bed.isOccupied) return res.status(409).json({ message: 'Bed is already occupied' });
 
-    const record = await IPD.create({ ...req.body, admittedBy: req.user._id });
+    // New admissions start as 'admitted'; status transitions to under-treatment automatically
+    const record = await IPD.create({ ...req.body, admittedBy: req.user._id, status: 'admitted' });
 
-    // Mark bed as occupied
     bed.isOccupied = true;
     bed.currentPatient = req.body.patient;
     await bed.save();
@@ -104,7 +154,6 @@ exports.dischargePatient = async (req, res) => {
     if (req.body.notes) record.notes = req.body.notes;
     await record.save();
 
-    // Free the bed
     if (record.bed) {
       await Bed.findByIdAndUpdate(record.bed._id, { isOccupied: false, currentPatient: null });
     }

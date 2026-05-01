@@ -6,6 +6,15 @@ import { formatDate, formatCurrency, statusColors, getTodayString, timeSlots } f
 
 const StatusBadge = ({ status }) => <span className={`badge badge-${statusColors[status] || 'gray'}`}>{status}</span>;
 
+// Parse "09:00 AM" into minutes since midnight for comparison
+function slotToMinutes(slot) {
+  const [time, meridiem] = slot.split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (meridiem === 'PM' && hours !== 12) hours += 12;
+  if (meridiem === 'AM' && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+}
+
 function BookModal({ onClose, onBooked, currentUser }) {
   const [doctors, setDoctors] = useState([]);
   const [patients, setPatients] = useState([]);
@@ -13,6 +22,8 @@ function BookModal({ onClose, onBooked, currentUser }) {
   const [form, setForm] = useState({ doctorId: '', patientId: currentUser.role === 'patient' ? currentUser._id : '', date: '', timeSlot: '', reason: '', type: 'opd' });
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  const isAdmin = currentUser.role === 'admin';
 
   useEffect(() => {
     api.get('/doctors').then(r => setDoctors(r.data.doctors));
@@ -24,9 +35,21 @@ function BookModal({ onClose, onBooked, currentUser }) {
   useEffect(() => {
     if (form.doctorId && form.date) {
       api.get(`/appointments/slots?doctorId=${form.doctorId}&date=${form.date}`)
-        .then(r => setSlots(r.data.available));
+        .then(r => {
+          let available = r.data.available;
+          // Extra client-side guard: filter past slots for today (non-admin)
+          if (!isAdmin) {
+            const today = getTodayString();
+            if (form.date === today) {
+              const now = new Date();
+              const nowMinutes = now.getHours() * 60 + now.getMinutes();
+              available = available.filter(s => slotToMinutes(s) > nowMinutes);
+            }
+          }
+          setSlots(available);
+        });
     }
-  }, [form.doctorId, form.date]);
+  }, [form.doctorId, form.date, isAdmin]);
 
   useEffect(() => {
     if (form.doctorId) {
@@ -41,10 +64,30 @@ function BookModal({ onClose, onBooked, currentUser }) {
     try {
       const { data } = await api.post('/appointments', form);
       toast.success('Appointment booked! Proceeding to payment...');
-      // Simulate payment
       setTimeout(async () => {
         await api.post(`/appointments/${data.appointment._id}/pay`);
         toast.success('Payment confirmed! Appointment is confirmed.');
+
+        // Auto-create OPD record if type is opd
+        if (form.type === 'opd') {
+          try {
+            await api.post('/opd', {
+              patient: data.appointment.patient._id || data.appointment.patient,
+              doctor: data.appointment.doctor._id || data.appointment.doctor,
+              appointment: data.appointment._id,
+              chiefComplaint: form.reason,
+              status: 'waiting',
+              visitDate: data.appointment.date,
+            });
+          } catch (opdErr) {
+            // Non-critical: OPD record may already exist or fail silently
+            console.warn('OPD auto-create failed:', opdErr.message);
+          }
+        }
+
+        // Auto-create IPD record if type is ipd (bed selection handled in IPD page)
+        // We just mark the appointment; IPD page handles full admission
+
         onBooked();
         onClose();
       }, 1500);
@@ -53,6 +96,9 @@ function BookModal({ onClose, onBooked, currentUser }) {
       setLoading(false);
     }
   };
+
+  // Min date: today for everyone; no restriction for admin
+  const minDate = isAdmin ? undefined : getTodayString();
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -91,7 +137,14 @@ function BookModal({ onClose, onBooked, currentUser }) {
             <div className="grid-2">
               <div className="form-group">
                 <label className="form-label">Date *</label>
-                <input className="form-control" type="date" min={getTodayString()} value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value, timeSlot: '' }))} required />
+                <input
+                  className="form-control"
+                  type="date"
+                  min={minDate}
+                  value={form.date}
+                  onChange={e => setForm(f => ({ ...f, date: e.target.value, timeSlot: '' }))}
+                  required
+                />
               </div>
               <div className="form-group">
                 <label className="form-label">Time Slot *</label>
@@ -106,7 +159,9 @@ function BookModal({ onClose, onBooked, currentUser }) {
             <div className="form-group">
               <label className="form-label">Appointment Type</label>
               <select className="form-control" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
-                <option value="opd">OPD</option><option value="ipd">IPD</option><option value="emergency">Emergency</option>
+                <option value="opd">OPD</option>
+                <option value="ipd">IPD</option>
+                <option value="emergency">Emergency</option>
               </select>
             </div>
 
@@ -118,6 +173,12 @@ function BookModal({ onClose, onBooked, currentUser }) {
             {selectedDoctor && (
               <div style={{ background: 'var(--warning-light)', padding: '12px', borderRadius: 'var(--radius)', fontSize: '0.82rem', color: 'var(--warning)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 💳 <span>A payment of <strong>{formatCurrency(selectedDoctor.consultationFee)}</strong> will be processed to confirm your appointment.</span>
+              </div>
+            )}
+
+            {form.type === 'opd' && (
+              <div style={{ background: 'var(--success-light)', padding: '10px 12px', borderRadius: 'var(--radius)', fontSize: '0.8rem', color: 'var(--success)', marginTop: '10px' }}>
+                🏥 An OPD visit record will be automatically created and placed in <strong>Waiting</strong> status.
               </div>
             )}
           </div>
@@ -189,7 +250,6 @@ export default function AppointmentsPage() {
         {canBook && <button onClick={() => setShowModal(true)} className="btn btn-primary">+ Book Appointment</button>}
       </div>
 
-      {/* Filters */}
       <div className="filter-bar">
         <div className="search-input" style={{ flex: 1, maxWidth: '300px' }}>
           <span className="search-icon">🔍</span>
