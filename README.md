@@ -307,8 +307,3 @@ pm2 start server/index.js --name mednova
 
 ---
 
-## 📝 License
-
-MIT — Free for personal and commercial use.
-
-Built with ❤️ for healthcare teams.
