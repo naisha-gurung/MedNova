@@ -8,8 +8,8 @@ A full-stack, production-grade Hospital Management System built with React.js, N
 
 | Module | Description |
 |---|---|
-| **Auth** | JWT + Google OAuth, Role-based access (6 roles) |
-| **Dashboard** | Live stats, charts, bed occupancy, revenue |
+| **Auth** | JWT + Google OAuth, Role-based access (7 roles) |
+| **Dashboard** | Role-aware dashboards — patients see personal health data, doctors see their schedule, admins see full hospital stats |
 | **Appointments** | Slot-based booking, no double-booking, payment confirmation |
 | **Doctors** | Searchable directory with fees & specializations |
 | **OPD** | Outpatient records with vitals tracking |
@@ -36,13 +36,20 @@ A full-stack, production-grade Hospital Management System built with React.js, N
 
 | Role | Dashboard | Appointments | OPD | IPD | Prescriptions | Inventory | Users |
 |---|---|---|---|---|---|---|---|
-| **Admin** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
-| **Doctor** | ✅ | ✅ Write | ✅ Write | ✅ Write | ✅ Write | 👁 Read | ❌ |
-| **Nurse** | ✅ | ✅ Write | ✅ Write | ✅ Write | ✅ Write | 👁 Read | ❌ |
-| **Pharmacist** | ✅ | 👁 Read | 👁 Read | 👁 Read | 👁 Read | ✅ Write | ❌ |
-| **Receptionist** | ✅ | ✅ Book | 👁 Read | 👁 Read | 👁 Read | 👁 Read | ❌ |
-| **Patient** | ✅ | ✅ Own only | ❌ | ❌ | 👁 Own only | ❌ | ❌ |
-| **Worker** | ✅ | 👁 Read | 👁 Read | 👁 Read | 👁 Read | 👁 Read | ❌ |
+| **Admin** | ✅ Full + Revenue | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| **Doctor** | ✅ Own schedule | ✅ Write | ✅ Write | ✅ Write | ✅ Write | 👁 Read | ❌ |
+| **Nurse** | ✅ Hospital ops | ✅ Write | ✅ Write | ✅ Write | ✅ Write | 👁 Read | ❌ |
+| **Pharmacist** | ✅ Hospital ops | 👁 Read | 👁 Read | 👁 Read | 👁 Read | ✅ Write | ❌ |
+| **Receptionist** | ✅ Hospital ops | ✅ Book | 👁 Read | 👁 Read | 👁 Read | 👁 Read | ❌ |
+| **Patient** | ✅ Personal only | ✅ Own only | ❌ | ❌ | 👁 Own only | ❌ | ❌ |
+| **Worker** | ✅ Hospital ops | 👁 Read | 👁 Read | 👁 Read | 👁 Read | 👁 Read | ❌ |
+
+### Dashboard breakdown by role
+
+- **Admin** — full hospital stats (patients, doctors, beds, OPD/IPD, low stock, revenue), appointment trend, recent appointments from all users
+- **Doctor** — own today's appointments, pending approvals, unique patients seen, prescriptions issued, quick links to schedule/OPD/prescriptions
+- **Nurse / Receptionist / Pharmacist / Worker** — hospital-operational stats (patients, doctors, beds, OPD/IPD, low stock) — **no revenue data**
+- **Patient** — personal stats only (own appointments, upcoming visits, prescriptions), quick action cards, own appointment history. No hospital-level data is exposed.
 
 ---
 
@@ -80,7 +87,7 @@ mednova/
 │   │   ├── opd.js
 │   │   ├── ipd.js
 │   │   ├── doctors.js
-│   │   └── dashboard.js
+│   │   └── dashboard.js      # Role-aware stats endpoint
 │   ├── utils/
 │   │   └── seed.js           # Database seeder
 │   ├── uploads/              # Auto-created for profile pictures
@@ -101,7 +108,7 @@ mednova/
 │   │   ├── pages/
 │   │   │   ├── LoginPage.jsx
 │   │   │   ├── RegisterPage.jsx
-│   │   │   ├── DashboardPage.jsx
+│   │   │   ├── DashboardPage.jsx # Renders PatientDashboard / DoctorDashboard / AdminDashboard
 │   │   │   ├── ProfilePage.jsx
 │   │   │   ├── AppointmentsPage.jsx
 │   │   │   ├── DoctorsPage.jsx
@@ -220,6 +227,9 @@ All accounts use password: **`password123`**
 
 ## 🏗 Key Design Decisions
 
+### Role-Aware Dashboards
+The `/api/dashboard/stats` endpoint detects the requesting user's role and returns only the data relevant to them. Patients receive their own appointment and prescription counts — no hospital-level metrics. Doctors receive their personal schedule stats. Admins are the only role that receives revenue figures. This is enforced server-side; the frontend simply renders whichever dashboard component matches the `role` field in the API response.
+
 ### No Double Booking
 Appointments enforce uniqueness at the database level via a compound index on `(doctor, date, timeSlot)`. The API also checks in-memory before attempting insertion.
 
@@ -271,12 +281,17 @@ pm2 start server/index.js --name mednova
 ### Appointments
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/appointments` | List (role-filtered) |
+| GET | `/api/appointments` | List (role-filtered — patients see own, doctors see own, admins see all) |
 | GET | `/api/appointments/slots` | Available time slots |
 | POST | `/api/appointments` | Book appointment |
 | POST | `/api/appointments/:id/pay` | Process payment |
 | PUT | `/api/appointments/:id` | Update status |
 | PATCH | `/api/appointments/:id/cancel` | Cancel |
+
+### Dashboard
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/dashboard/stats` | Role-aware stats — response shape varies by role (patient / doctor / admin+staff) |
 
 ### IPD / Beds
 | Method | Endpoint | Description |
