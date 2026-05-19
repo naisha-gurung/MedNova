@@ -22,3 +22,27 @@ const prescriptionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 module.exports = mongoose.model('Prescription', prescriptionSchema);
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  if (form.medicines.length === 0) return toast.error('Add at least one medicine');
+  if (needsDoctorSelect && !form.doctor) return toast.error('Please select a doctor');
+
+  setSaving(true);
+  try {
+    const payload = sanitizePayload(form);
+
+    // ✅ Strip empty inventoryItem from each medicine line
+    payload.medicines = payload.medicines.map(med => {
+      const m = { ...med };
+      if (!m.inventoryItem) delete m.inventoryItem;
+      return m;
+    });
+
+    await api.post('/prescriptions', payload);
+    toast.success('Prescription created');
+    onSaved(); onClose();
+  } catch (err) {
+    if (!err._toasted) toast.error(err.response?.data?.message || 'Failed to save');
+  } finally { setSaving(false); }
+};

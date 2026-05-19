@@ -20,7 +20,9 @@ const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct',
 // ─── Patient Dashboard ───────────────────────────────────────────────────────
 function PatientDashboard({ user, data }) {
   const { stats = {}, recentAppointments = [], monthlyTrend = [] } = data;
-  const trendData = monthlyTrend.map(m => ({ name: monthNames[m._id.month - 1], appointments: m.count }));
+const trendData = [...monthlyTrend]
+  .sort((a, b) => a._id.year !== b._id.year ? a._id.year - b._id.year : a._id.month - b._id.month)
+  .map(m => ({ name: monthNames[m._id.month - 1], appointments: m.count }));
 
   return (
     <div>
@@ -144,7 +146,9 @@ function PatientDashboard({ user, data }) {
 // ─── Doctor Dashboard ────────────────────────────────────────────────────────
 function DoctorDashboard({ user, data }) {
   const { stats = {}, recentAppointments = [], monthlyTrend = [] } = data;
-  const trendData = monthlyTrend.map(m => ({ name: monthNames[m._id.month - 1], appointments: m.count }));
+ const trendData = [...monthlyTrend]
+  .sort((a, b) => a._id.year !== b._id.year ? a._id.year - b._id.year : a._id.month - b._id.month)
+  .map(m => ({ name: monthNames[m._id.month - 1], appointments: m.count }));
 
   return (
     <div>
@@ -252,7 +256,9 @@ function DoctorDashboard({ user, data }) {
 // ─── Admin / Staff Dashboard ─────────────────────────────────────────────────
 function AdminDashboard({ user, data }) {
   const { stats = {}, recentAppointments = [], monthlyTrend = [] } = data;
-  const trendData = monthlyTrend.map(m => ({ name: monthNames[m._id.month - 1], appointments: m.count }));
+ const trendData = [...monthlyTrend]
+  .sort((a, b) => a._id.year !== b._id.year ? a._id.year - b._id.year : a._id.month - b._id.month)
+  .map(m => ({ name: monthNames[m._id.month - 1], appointments: m.count }));
   const bedPct = stats.totalBeds ? Math.round((stats.occupiedBeds / stats.totalBeds) * 100) : 0;
   const isAdmin = user?.role === 'admin';
 

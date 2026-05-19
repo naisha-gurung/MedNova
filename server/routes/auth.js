@@ -4,6 +4,8 @@ const { register, login, googleAuth, getMe, updateProfile, changePassword } = re
 const { protect } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 
+// ✅ FIX: was authController.register — but authController was never defined.
+// The functions are already destructured at the top, so use them directly.
 router.post('/register', upload.single('profilePicture'), register);
 router.post('/login', login);
 router.post('/google', googleAuth);

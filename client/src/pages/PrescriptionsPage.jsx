@@ -4,26 +4,80 @@ import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { formatDate } from '../utils/helpers';
 
+// ─── Strips empty strings from ObjectId fields before sending to backend ──────
+// Mongoose will throw a BSONError if it receives "" for an ObjectId field.
+const sanitizePayload = (form) => {
+  const payload = { ...form };
+  // Fields that map to ObjectId in the schema — strip if empty
+  ['appointment', 'patient', 'doctor'].forEach(field => {
+    if (payload[field] === '' || payload[field] === null || payload[field] === undefined) {
+      delete payload[field];
+    }
+  });
+  return payload;
+};
+
 function PrescriptionModal({ onClose, onSaved }) {
   const { user } = useAuth();
+
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [inventory, setInventory] = useState([]);
-  const [form, setForm] = useState({ patient: '', appointment: '', diagnosis: '', notes: '', followUpDate: '', medicines: [] });
+  const [doctors, setDoctors] = useState([]);        // ← new: doctor list
+  const [loadingDoctors, setLoadingDoctors] = useState(false);
+
+  const [form, setForm] = useState({
+    patient: '',
+    appointment: '',
+    doctor: '',       // ← new: only sent when admin/nurse selects one
+    diagnosis: '',
+    notes: '',
+    followUpDate: '',
+    medicines: [],
+  });
   const [saving, setSaving] = useState(false);
 
+  // Roles that need to pick a doctor themselves (not auto-assigned from req.user)
+  const needsDoctorSelect = ['admin', 'nurse', 'receptionist'].includes(user?.role);
+
   useEffect(() => {
-    api.get('/users?role=patient').then(r => setPatients(r.data.users));
-    api.get('/inventory').then(r => setInventory(r.data.items));
-    if (user.role === 'doctor') {
-      api.get('/appointments?status=confirmed').then(r => setAppointments(r.data.appointments));
+    api.get('/users?role=patient').then(r => setPatients(r.data.users || []));
+    api.get('/inventory').then(r => setInventory(r.data.items || []));
+
+    if (user?.role === 'doctor') {
+      api.get('/appointments?status=confirmed').then(r => setAppointments(r.data.appointments || []));
     }
-  }, [user.role]);
+
+    // Fetch doctor list for roles that need to assign a doctor manually
+    if (needsDoctorSelect) {
+      setLoadingDoctors(true);
+      api.get('/doctors')
+        .then(r => setDoctors(r.data.doctors || []))
+        .catch(() => toast.error('Could not load doctors list'))
+        .finally(() => setLoadingDoctors(false));
+    }
+  }, [user?.role, needsDoctorSelect]);
+
+  // ── When a doctor is selected, also load their confirmed appointments ────────
+  const handleDoctorChange = async (doctorId) => {
+    setForm(f => ({ ...f, doctor: doctorId, appointment: '' }));
+    setAppointments([]);
+    if (!doctorId) return;
+    try {
+      const { data } = await api.get(`/appointments?status=confirmed&doctorId=${doctorId}`);
+      setAppointments(data.appointments || []);
+    } catch {
+      // Silently ignore — appointments field is optional
+    }
+  };
 
   const addMedicine = (external = false) => {
     setForm(f => ({
       ...f,
-      medicines: [...f.medicines, { inventoryItem: '', medicineName: '', isExternal: external, dosage: '', frequency: '', duration: '', instructions: '' }]
+      medicines: [
+        ...f.medicines,
+        { inventoryItem: '', medicineName: '', isExternal: external, dosage: '', frequency: '', duration: '', instructions: '' },
+      ],
     }));
   };
 
@@ -39,18 +93,27 @@ function PrescriptionModal({ onClose, onSaved }) {
     });
   };
 
-  const removeMed = (idx) => setForm(f => ({ ...f, medicines: f.medicines.filter((_, i) => i !== idx) }));
+  const removeMed = (idx) =>
+    setForm(f => ({ ...f, medicines: f.medicines.filter((_, i) => i !== idx) }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (form.medicines.length === 0) return toast.error('Add at least one medicine');
+    if (needsDoctorSelect && !form.doctor) return toast.error('Please select a doctor');
+
     setSaving(true);
     try {
-      await api.post('/prescriptions', form);
+      // ✅ KEY FIX: strip empty strings from ObjectId fields before POST
+      const payload = sanitizePayload(form);
+      await api.post('/prescriptions', payload);
       toast.success('Prescription created');
-      onSaved(); onClose();
-    } catch (err) { toast.error(err.response?.data?.message || 'Failed to save'); }
-    finally { setSaving(false); }
+      onSaved();
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -60,114 +123,276 @@ function PrescriptionModal({ onClose, onSaved }) {
           <h2 style={{ fontWeight: '700', fontSize: '1.05rem' }}>💊 New Prescription</h2>
           <button onClick={onClose} className="btn btn-icon btn-secondary">✕</button>
         </div>
+
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             <div className="grid-2" style={{ marginBottom: '0' }}>
-              <div className="form-group">
-                <label className="form-label">Patient *</label>
-                <select className="form-control" value={form.patient} onChange={e => setForm(f => ({ ...f, patient: e.target.value }))} required>
-                  <option value="">Select patient</option>
-                  {patients.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
-                </select>
-              </div>
-              {appointments.length > 0 && (
-                <div className="form-group">
-                  <label className="form-label">Linked Appointment</label>
-                  <select className="form-control" value={form.appointment} onChange={e => setForm(f => ({ ...f, appointment: e.target.value }))}>
-                    <option value="">None</option>
-                    {appointments.map(a => <option key={a._id} value={a._id}>{a.patient?.name} — {formatDate(a.date)} {a.timeSlot}</option>)}
+
+              {/* ── Doctor dropdown — shown for admin / nurse / receptionist ── */}
+              {needsDoctorSelect && (
+                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                  <label className="form-label">Doctor *</label>
+                  <select
+                    className="form-control"
+                    value={form.doctor}
+                    onChange={e => handleDoctorChange(e.target.value)}
+                    required
+                    disabled={loadingDoctors}
+                  >
+                    <option value="">
+                      {loadingDoctors ? 'Loading doctors...' : 'Select doctor'}
+                    </option>
+                    {doctors.map(d => (
+                      <option key={d._id} value={d._id}>
+                        {d.name}
+                        {d.specialization ? ` — ${d.specialization}` : ''}
+                        {d.department ? ` (${d.department})` : ''}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
+
+              {/* ── Patient dropdown ────────────────────────────────────────── */}
+              <div className="form-group">
+                <label className="form-label">Patient *</label>
+                <select
+                  className="form-control"
+                  value={form.patient}
+                  onChange={e => setForm(f => ({ ...f, patient: e.target.value }))}
+                  required
+                >
+                  <option value="">Select patient</option>
+                  {patients.map(p => (
+                    <option key={p._id} value={p._id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* ── Linked appointment — shown when appointments are available ─ */}
+              {appointments.length > 0 && (
+                <div className="form-group">
+                  <label className="form-label">Linked Appointment</label>
+                  <select
+                    className="form-control"
+                    value={form.appointment}
+                    onChange={e => setForm(f => ({ ...f, appointment: e.target.value }))}
+                  >
+                    <option value="">None</option>
+                    {appointments.map(a => (
+                      <option key={a._id} value={a._id}>
+                        {a.patient?.name} — {formatDate(a.date)} {a.timeSlot}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* ── Diagnosis ───────────────────────────────────────────────── */}
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                 <label className="form-label">Diagnosis *</label>
-                <textarea className="form-control" rows={2} value={form.diagnosis} onChange={e => setForm(f => ({ ...f, diagnosis: e.target.value }))} required style={{ resize: 'vertical' }} placeholder="Primary diagnosis..." />
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  value={form.diagnosis}
+                  onChange={e => setForm(f => ({ ...f, diagnosis: e.target.value }))}
+                  required
+                  style={{ resize: 'vertical' }}
+                  placeholder="Primary diagnosis..."
+                />
               </div>
             </div>
 
-            {/* Medicines */}
+            {/* ── Medicines ─────────────────────────────────────────────────── */}
             <div style={{ marginBottom: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <label className="form-label" style={{ margin: 0 }}>Medicines *</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button type="button" onClick={() => addMedicine(false)} className="btn btn-secondary btn-sm">+ From Inventory</button>
-                  <button type="button" onClick={() => addMedicine(true)} className="btn btn-sm" style={{ background: 'var(--warning-light)', color: 'var(--warning)', border: '1.5px solid var(--warning)', borderRadius: 'var(--radius-sm)', padding: '6px 12px', fontSize: '0.8rem', fontWeight: '600', cursor: 'pointer' }}>+ Other Medicine</button>
+                  <button type="button" onClick={() => addMedicine(false)} className="btn btn-secondary btn-sm">
+                    + From Inventory
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addMedicine(true)}
+                    className="btn btn-sm"
+                    style={{
+                      background: 'var(--warning-light)',
+                      color: 'var(--warning)',
+                      border: '1.5px solid var(--warning)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '6px 12px',
+                      fontSize: '0.8rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    + Other Medicine
+                  </button>
                 </div>
               </div>
 
               {form.medicines.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '24px', background: 'var(--gray-50)', borderRadius: 'var(--radius)', border: '2px dashed var(--gray-200)', color: 'var(--gray-400)', fontSize: '0.875rem' }}>
+                <div style={{
+                  textAlign: 'center', padding: '24px',
+                  background: 'var(--gray-50)', borderRadius: 'var(--radius)',
+                  border: '2px dashed var(--gray-200)', color: 'var(--gray-400)', fontSize: '0.875rem',
+                }}>
                   Click "From Inventory" or "Other Medicine" to add medicines
                 </div>
               )}
 
               {form.medicines.map((med, idx) => (
-                <div key={idx} style={{ background: med.isExternal ? 'rgba(217,119,6,0.04)' : 'var(--gray-50)', border: `1.5px solid ${med.isExternal ? 'var(--warning)' : 'var(--gray-200)'}`, borderRadius: 'var(--radius)', padding: '14px', marginBottom: '10px' }}>
+                <div
+                  key={idx}
+                  style={{
+                    background: med.isExternal ? 'rgba(217,119,6,0.04)' : 'var(--gray-50)',
+                    border: `1.5px solid ${med.isExternal ? 'var(--warning)' : 'var(--gray-200)'}`,
+                    borderRadius: 'var(--radius)',
+                    padding: '14px',
+                    marginBottom: '10px',
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--gray-700)' }}>Medicine {idx + 1}</span>
-                      {med.isExternal && <span style={{ background: 'var(--warning-light)', color: 'var(--warning)', padding: '2px 8px', borderRadius: '100px', fontSize: '0.68rem', fontWeight: '700', textTransform: 'uppercase' }}>Not in Inventory</span>}
+                      <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--gray-700)' }}>
+                        Medicine {idx + 1}
+                      </span>
+                      {med.isExternal && (
+                        <span style={{
+                          background: 'var(--warning-light)', color: 'var(--warning)',
+                          padding: '2px 8px', borderRadius: '100px',
+                          fontSize: '0.68rem', fontWeight: '700', textTransform: 'uppercase',
+                        }}>
+                          Not in Inventory
+                        </span>
+                      )}
                     </div>
-                    <button type="button" onClick={() => removeMed(idx)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1.1rem' }}>✕</button>
+                    <button
+                      type="button"
+                      onClick={() => removeMed(idx)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1.1rem' }}
+                    >
+                      ✕
+                    </button>
                   </div>
 
                   <div className="grid-2" style={{ marginBottom: '0' }}>
                     {!med.isExternal ? (
                       <div className="form-group">
                         <label className="form-label">Select from Inventory</label>
-                        <select className="form-control" value={med.inventoryItem} onChange={e => updateMed(idx, 'inventoryItem', e.target.value)} required>
+                        <select
+                          className="form-control"
+                          value={med.inventoryItem}
+                          onChange={e => updateMed(idx, 'inventoryItem', e.target.value)}
+                          required
+                        >
                           <option value="">Choose medicine</option>
-                          {inventory.map(i => <option key={i._id} value={i._id}>{i.name} ({i.quantity} {i.unit} left)</option>)}
+                          {inventory.map(i => (
+                            <option key={i._id} value={i._id}>{i.name} ({i.quantity} {i.unit} left)</option>
+                          ))}
                         </select>
                       </div>
                     ) : (
                       <div className="form-group">
                         <label className="form-label">Medicine Name *</label>
-                        <input className="form-control" placeholder="Enter medicine name" value={med.medicineName} onChange={e => updateMed(idx, 'medicineName', e.target.value)} required />
+                        <input
+                          className="form-control"
+                          placeholder="Enter medicine name"
+                          value={med.medicineName}
+                          onChange={e => updateMed(idx, 'medicineName', e.target.value)}
+                          required
+                        />
                       </div>
                     )}
+
                     <div className="form-group">
                       <label className="form-label">Dosage *</label>
-                      <input className="form-control" placeholder="e.g. 500mg" value={med.dosage} onChange={e => updateMed(idx, 'dosage', e.target.value)} required />
+                      <input
+                        className="form-control"
+                        placeholder="e.g. 500mg"
+                        value={med.dosage}
+                        onChange={e => updateMed(idx, 'dosage', e.target.value)}
+                        required
+                      />
                     </div>
+
                     <div className="form-group">
                       <label className="form-label">Frequency *</label>
-                      <select className="form-control" value={med.frequency} onChange={e => updateMed(idx, 'frequency', e.target.value)} required>
+                      <select
+                        className="form-control"
+                        value={med.frequency}
+                        onChange={e => updateMed(idx, 'frequency', e.target.value)}
+                        required
+                      >
                         <option value="">Select frequency</option>
-                        {['Once daily','Twice daily','3 times a day','4 times a day','Every 6 hours','Every 8 hours','Every 12 hours','As needed','Before meals','After meals','At bedtime'].map(f => <option key={f} value={f}>{f}</option>)}
+                        {[
+                          'Once daily', 'Twice daily', '3 times a day', '4 times a day',
+                          'Every 6 hours', 'Every 8 hours', 'Every 12 hours',
+                          'As needed', 'Before meals', 'After meals', 'At bedtime',
+                        ].map(f => <option key={f} value={f}>{f}</option>)}
                       </select>
                     </div>
+
                     <div className="form-group">
                       <label className="form-label">Duration *</label>
-                      <select className="form-control" value={med.duration} onChange={e => updateMed(idx, 'duration', e.target.value)} required>
+                      <select
+                        className="form-control"
+                        value={med.duration}
+                        onChange={e => updateMed(idx, 'duration', e.target.value)}
+                        required
+                      >
                         <option value="">Select duration</option>
-                        {['1 day','2 days','3 days','5 days','7 days','10 days','14 days','21 days','30 days','Ongoing'].map(d => <option key={d} value={d}>{d}</option>)}
+                        {[
+                          '1 day', '2 days', '3 days', '5 days', '7 days',
+                          '10 days', '14 days', '21 days', '30 days', 'Ongoing',
+                        ].map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
                     </div>
+
                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                       <label className="form-label">Special Instructions</label>
-                      <input className="form-control" placeholder="e.g. Take with food, avoid alcohol" value={med.instructions} onChange={e => updateMed(idx, 'instructions', e.target.value)} />
+                      <input
+                        className="form-control"
+                        placeholder="e.g. Take with food, avoid alcohol"
+                        value={med.instructions}
+                        onChange={e => updateMed(idx, 'instructions', e.target.value)}
+                      />
                     </div>
                   </div>
                 </div>
               ))}
             </div>
 
+            {/* ── Follow-up & notes ─────────────────────────────────────────── */}
             <div className="grid-2">
               <div className="form-group">
                 <label className="form-label">Follow-up Date</label>
-                <input className="form-control" type="date" value={form.followUpDate} onChange={e => setForm(f => ({ ...f, followUpDate: e.target.value }))} min={new Date().toISOString().split('T')[0]} />
+                <input
+                  className="form-control"
+                  type="date"
+                  value={form.followUpDate}
+                  onChange={e => setForm(f => ({ ...f, followUpDate: e.target.value }))}
+                  min={new Date().toISOString().split('T')[0]}
+                />
               </div>
               <div className="form-group">
                 <label className="form-label">Additional Notes</label>
-                <input className="form-control" placeholder="Any extra instructions..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+                <input
+                  className="form-control"
+                  placeholder="Any extra instructions..."
+                  value={form.notes}
+                  onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                />
               </div>
             </div>
           </div>
+
           <div className="modal-footer">
             <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={saving} className="btn btn-primary">
-              {saving ? <><div className="spinner spinner-sm" />Saving...</> : '💊 Create Prescription'}
+              {saving
+                ? <><div className="spinner spinner-sm" />Saving...</>
+                : '💊 Create Prescription'}
             </button>
           </div>
         </form>
@@ -176,16 +401,22 @@ function PrescriptionModal({ onClose, onSaved }) {
   );
 }
 
+// ─── View prescription (unchanged) ───────────────────────────────────────────
+
 function ViewPrescription({ id, onClose }) {
   const [rx, setRx] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get(`/prescriptions/${id}`).then(r => setRx(r.data.prescription)).finally(() => setLoading(false));
+    api.get(`/prescriptions/${id}`)
+      .then(r => setRx(r.data.prescription))
+      .finally(() => setLoading(false));
   }, [id]);
 
   if (loading) return (
-    <div className="modal-overlay"><div className="modal"><div className="loading-container"><div className="spinner" /></div></div></div>
+    <div className="modal-overlay">
+      <div className="modal"><div className="loading-container"><div className="spinner" /></div></div>
+    </div>
   );
   if (!rx) return null;
 
@@ -202,6 +433,7 @@ function ViewPrescription({ id, onClose }) {
           </div>
           <button onClick={onClose} className="btn btn-icon" style={{ color: 'white', border: '1.5px solid rgba(255,255,255,0.3)', background: 'rgba(255,255,255,0.1)' }}>✕</button>
         </div>
+
         <div className="modal-body">
           <div className="grid-2" style={{ marginBottom: '20px', padding: '16px', background: 'var(--gray-50)', borderRadius: 'var(--radius)' }}>
             <div>
@@ -234,17 +466,30 @@ function ViewPrescription({ id, onClose }) {
           <div style={{ marginBottom: '16px' }}>
             <div style={{ fontWeight: '700', fontSize: '0.85rem', color: 'var(--gray-700)', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>💊 Prescribed Medicines</div>
             {rx.medicines.map((med, i) => (
-              <div key={i} style={{ padding: '14px', border: `1.5px solid ${med.isExternal ? 'var(--warning)' : 'var(--gray-200)'}`, borderRadius: 'var(--radius)', marginBottom: '8px', background: med.isExternal ? 'rgba(217,119,6,0.03)' : 'var(--white)' }}>
+              <div key={i} style={{
+                padding: '14px',
+                border: `1.5px solid ${med.isExternal ? 'var(--warning)' : 'var(--gray-200)'}`,
+                borderRadius: 'var(--radius)', marginBottom: '8px',
+                background: med.isExternal ? 'rgba(217,119,6,0.03)' : 'var(--white)',
+              }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div style={{ fontWeight: '700', fontSize: '0.9rem' }}>{med.medicineName}</div>
-                  {med.isExternal && <span style={{ background: 'var(--warning-light)', color: 'var(--warning)', padding: '2px 8px', borderRadius: '100px', fontSize: '0.68rem', fontWeight: '700' }}>External</span>}
+                  {med.isExternal && (
+                    <span style={{ background: 'var(--warning-light)', color: 'var(--warning)', padding: '2px 8px', borderRadius: '100px', fontSize: '0.68rem', fontWeight: '700' }}>
+                      External
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', fontSize: '0.82rem', color: 'var(--gray-600)' }}>
                   <span>💊 <strong>Dosage:</strong> {med.dosage}</span>
                   <span>🔄 <strong>Frequency:</strong> {med.frequency}</span>
                   <span>📅 <strong>Duration:</strong> {med.duration}</span>
                 </div>
-                {med.instructions && <div style={{ marginTop: '6px', fontSize: '0.78rem', color: 'var(--gray-500)', fontStyle: 'italic' }}>ℹ {med.instructions}</div>}
+                {med.instructions && (
+                  <div style={{ marginTop: '6px', fontSize: '0.78rem', color: 'var(--gray-500)', fontStyle: 'italic' }}>
+                    ℹ {med.instructions}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -255,6 +500,7 @@ function ViewPrescription({ id, onClose }) {
             </div>
           )}
         </div>
+
         <div className="modal-footer">
           <button onClick={onClose} className="btn btn-secondary">Close</button>
           <button onClick={() => window.print()} className="btn btn-primary">🖨 Print</button>
@@ -263,6 +509,8 @@ function ViewPrescription({ id, onClose }) {
     </div>
   );
 }
+
+// ─── Page (unchanged) ─────────────────────────────────────────────────────────
 
 export default function PrescriptionsPage() {
   const { user } = useAuth();
@@ -279,8 +527,11 @@ export default function PrescriptionsPage() {
     try {
       const { data } = await api.get('/prescriptions');
       setPrescriptions(data.prescriptions);
-    } catch { toast.error('Failed to load prescriptions'); }
-    finally { setLoading(false); }
+    } catch {
+      toast.error('Failed to load prescriptions');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { fetchRx(); }, [fetchRx]);
@@ -295,13 +546,22 @@ export default function PrescriptionsPage() {
     <div>
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div><h1>Prescriptions</h1><p>Digital prescription management</p></div>
-        {canCreate && <button onClick={() => setShowCreate(true)} className="btn btn-primary">+ New Prescription</button>}
+        {canCreate && (
+          <button onClick={() => setShowCreate(true)} className="btn btn-primary">
+            + New Prescription
+          </button>
+        )}
       </div>
 
       <div className="filter-bar">
         <div className="search-input" style={{ flex: 1, maxWidth: '320px' }}>
           <span className="search-icon">🔍</span>
-          <input className="form-control" placeholder="Search by patient or diagnosis..." value={search} onChange={e => setSearch(e.target.value)} />
+          <input
+            className="form-control"
+            placeholder="Search by patient or diagnosis..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
         </div>
       </div>
 
@@ -314,7 +574,11 @@ export default function PrescriptionsPage() {
           <div className="table-wrapper">
             <table>
               <thead>
-                <tr><th>Patient</th><th>Doctor</th><th>Diagnosis</th><th>Medicines</th><th>Date</th><th>Follow-up</th><th>Status</th><th>Action</th></tr>
+                <tr>
+                  <th>Patient</th><th>Doctor</th><th>Diagnosis</th>
+                  <th>Medicines</th><th>Date</th><th>Follow-up</th>
+                  <th>Status</th><th>Action</th>
+                </tr>
               </thead>
               <tbody>
                 {filtered.map(rx => (
@@ -328,25 +592,41 @@ export default function PrescriptionsPage() {
                       <div style={{ fontSize: '0.72rem', color: 'var(--gray-400)' }}>{rx.doctor?.specialization}</div>
                     </td>
                     <td style={{ maxWidth: '180px' }}>
-                      <div style={{ fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rx.diagnosis}</div>
+                      <div style={{ fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {rx.diagnosis}
+                      </div>
                     </td>
                     <td>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {rx.medicines.slice(0, 2).map((m, i) => (
-                          <span key={i} style={{ background: m.isExternal ? 'var(--warning-light)' : 'var(--primary-light)', color: m.isExternal ? 'var(--warning)' : 'var(--primary)', padding: '2px 7px', borderRadius: '100px', fontSize: '0.7rem', fontWeight: '600' }}>
+                          <span key={i} style={{
+                            background: m.isExternal ? 'var(--warning-light)' : 'var(--primary-light)',
+                            color: m.isExternal ? 'var(--warning)' : 'var(--primary)',
+                            padding: '2px 7px', borderRadius: '100px', fontSize: '0.7rem', fontWeight: '600',
+                          }}>
                             {m.medicineName}
                           </span>
                         ))}
-                        {rx.medicines.length > 2 && <span style={{ fontSize: '0.7rem', color: 'var(--gray-400)', padding: '2px 4px' }}>+{rx.medicines.length - 2} more</span>}
+                        {rx.medicines.length > 2 && (
+                          <span style={{ fontSize: '0.7rem', color: 'var(--gray-400)', padding: '2px 4px' }}>
+                            +{rx.medicines.length - 2} more
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td style={{ fontSize: '0.82rem' }}>{formatDate(rx.createdAt)}</td>
                     <td style={{ fontSize: '0.82rem', color: rx.followUpDate ? 'var(--primary)' : 'var(--gray-400)' }}>
                       {rx.followUpDate ? formatDate(rx.followUpDate) : '—'}
                     </td>
-                    <td><span className={`badge badge-${rx.status === 'active' ? 'success' : 'gray'}`}>{rx.status}</span></td>
                     <td>
-                      <button onClick={() => setViewId(rx._id)} className="btn btn-secondary btn-sm">View</button>
+                      <span className={`badge badge-${rx.status === 'active' ? 'success' : 'gray'}`}>
+                        {rx.status}
+                      </span>
+                    </td>
+                    <td>
+                      <button onClick={() => setViewId(rx._id)} className="btn btn-secondary btn-sm">
+                        View
+                      </button>
                     </td>
                   </tr>
                 ))}

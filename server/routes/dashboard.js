@@ -48,9 +48,9 @@ router.get('/stats', protect, async (req, res) => {
         const sixMonthsAgo = new Date();
         sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
         monthlyTrend = await Appointment.aggregate([
-          { $match: { patient: userId, createdAt: { $gte: sixMonthsAgo } } },
-          { $group: { _id: { month: { $month: '$createdAt' }, year: { $year: '$createdAt' } }, count: { $sum: 1 } } },
-          { $sort: { '_id.year': 1, '_id.month': 1 } },
+          { $match: { patient: userId, date: { $gte: sixMonthsAgo } } },
+{ $group: { _id: { month: { $month: '$date' }, year: { $year: '$date' } }, count: { $sum: 1 } } },
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
         ]).exec();
       } catch (e) {
         console.error('Monthly trend aggregate error:', e.message);
@@ -95,9 +95,9 @@ router.get('/stats', protect, async (req, res) => {
         const sixMonthsAgo = new Date();
         sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
         monthlyTrend = await Appointment.aggregate([
-          { $match: { doctor: userId, createdAt: { $gte: sixMonthsAgo } } },
-          { $group: { _id: { month: { $month: '$createdAt' }, year: { $year: '$createdAt' } }, count: { $sum: 1 } } },
-          { $sort: { '_id.year': 1, '_id.month': 1 } },
+          { $match: { doctor: userId, date: { $gte: sixMonthsAgo } } },
+{ $group: { _id: { month: { $month: '$date' }, year: { $year: '$date' } }, count: { $sum: 1 } } },
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
         ]).exec();
       } catch (e) {
         console.error('Monthly trend aggregate error:', e.message);
@@ -169,9 +169,9 @@ router.get('/stats', protect, async (req, res) => {
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       monthlyTrend = await Appointment.aggregate([
-        { $match: { createdAt: { $gte: sixMonthsAgo } } },
-        { $group: { _id: { month: { $month: '$createdAt' }, year: { $year: '$createdAt' } }, count: { $sum: 1 } } },
-        { $sort: { '_id.year': 1, '_id.month': 1 } },
+{ $match: { date: { $gte: sixMonthsAgo } } },
+{ $group: { _id: { month: { $month: '$date' }, year: { $year: '$date' } }, count: { $sum: 1 } } },
+   { $sort: { '_id.year': 1, '_id.month': 1 } },
       ]).exec();
     } catch (e) {
       console.error('Monthly trend aggregate error:', e.message);

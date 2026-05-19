@@ -1,33 +1,12 @@
 const { IPD, Bed } = require('../models/IPD');
-const Appointment = require('../models/Appointment');
 
-// Helper: parse "09:00 AM" style slot into a Date
-function slotToDateTime(dateStr, slot) {
-  const [time, meridiem] = slot.split(' ');
-  let [hours, minutes] = time.split(':').map(Number);
-  if (meridiem === 'PM' && hours !== 12) hours += 12;
-  if (meridiem === 'AM' && hours === 12) hours = 0;
-  const d = new Date(dateStr);
-  d.setHours(hours, minutes, 0, 0);
-  return d;
-}
-
-// Derive IPD status from appointment:
-// - future appointment: admitted (waiting)
-// - within 24 hours of admission: under-treatment
-// - more than 24 hours: stays under-treatment until discharged manually
-// Logic based on admissionDate (when actually admitted):
-// - admitted < 24 hours ago: under-treatment
-// - If linked to appointment and slot is in the future: admitted
 function deriveIPDStatus(record) {
-  if (!record || record.status === 'discharged') return null;
+  if (!record || record.status === 'discharged' || record.status === 'transferred') return null;
   const now = new Date();
   const admissionTime = new Date(record.admissionDate);
   const diffMs = now - admissionTime;
-
-  if (diffMs < 0) return 'admitted';                           // future admission
-  if (diffMs <= 24 * 60 * 60 * 1000) return 'under-treatment'; // within 24 hours
-  // More than 24 hours: keep as under-treatment (still in hospital)
+  if (diffMs < 0) return 'admitted';
+  if (diffMs <= 24 * 60 * 60 * 1000) return 'under-treatment';
   return 'under-treatment';
 }
 
@@ -37,7 +16,9 @@ exports.getAllBeds = async (req, res) => {
     const query = {};
     if (ward) query.ward = ward;
     if (isOccupied !== undefined) query.isOccupied = isOccupied === 'true';
-    const beds = await Bed.find(query).populate('currentPatient', 'name email').sort('ward bedNumber');
+    const beds = await Bed.find(query)
+      .populate('currentPatient', 'name email')
+      .sort('ward bedNumber');
     res.json({ beds });
   } catch (err) { res.status(500).json({ message: err.message }); }
 };
@@ -66,6 +47,7 @@ exports.getAllIPD = async (req, res) => {
     const query = {};
     if (status) query.status = status;
     if (req.user.role === 'doctor') query.doctor = req.user._id;
+
     const total = await IPD.countDocuments(query);
     const records = await IPD.find(query)
       .populate('patient', 'name email phone gender bloodGroup profilePicture')
@@ -75,7 +57,7 @@ exports.getAllIPD = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(Number(limit));
 
-    // Auto-derive and update status for non-discharged records
+    // Auto-derive and persist status transitions
     const updatedRecords = await Promise.all(records.map(async (r) => {
       const rObj = r.toObject();
       if (r.status !== 'discharged' && r.status !== 'transferred') {
@@ -88,7 +70,7 @@ exports.getAllIPD = async (req, res) => {
       return rObj;
     }));
 
-    // Re-filter after status update
+    // Re-filter after status transitions so the list matches what was requested
     const finalRecords = status
       ? updatedRecords.filter(r => r.status === status)
       : updatedRecords;
@@ -110,14 +92,23 @@ exports.getIPDById = async (req, res) => {
 
 exports.admitPatient = async (req, res) => {
   try {
-    const { bedId } = req.body;
+    // ✅ FIX: the form sends { bed: '...' } not { bedId: '...' }
+    // Previously `const { bedId } = req.body` was always undefined → always "Bed not found"
+    const bedId = req.body.bed;
+
+    if (!bedId) return res.status(400).json({ message: 'Bed is required' });
+
     const bed = await Bed.findById(bedId);
     if (!bed) return res.status(404).json({ message: 'Bed not found' });
     if (bed.isOccupied) return res.status(409).json({ message: 'Bed is already occupied' });
 
-    // New admissions start as 'admitted'; status transitions to under-treatment automatically
-    const record = await IPD.create({ ...req.body, admittedBy: req.user._id, status: 'admitted' });
+    const record = await IPD.create({
+      ...req.body,
+      admittedBy: req.user._id,
+    status: 'under-treatment',
+    });
 
+    // Mark bed as occupied
     bed.isOccupied = true;
     bed.currentPatient = req.body.patient;
     await bed.save();
@@ -125,7 +116,7 @@ exports.admitPatient = async (req, res) => {
     await record.populate([
       { path: 'patient', select: 'name email' },
       { path: 'doctor', select: 'name specialization' },
-      { path: 'bed', select: 'bedNumber ward type' }
+      { path: 'bed', select: 'bedNumber ward type' },
     ]);
 
     res.status(201).json({ record });

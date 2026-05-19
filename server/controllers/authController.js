@@ -16,7 +16,9 @@ exports.register = async (req, res) => {
     if (existing) return res.status(400).json({ message: 'Email already registered' });
 
     const profilePicture = req.file ? `/uploads/profiles/${req.file.filename}` : '';
-
+if (req.file) {
+  userData.profilePicture = `/uploads/profiles/${req.file.filename}`;
+}
     const user = await User.create({
       name, email, password, phone, gender, dateOfBirth, bloodGroup, address,
       profilePicture, role: 'patient'

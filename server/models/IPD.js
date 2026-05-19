@@ -27,7 +27,7 @@ const ipdSchema = new mongoose.Schema({
     oxygenSaturation: String,
     notes: String,
   }],
-  status: { type: String, enum: ['admitted', 'under-treatment', 'discharged', 'transferred'], default: 'admitted' },
+  status: { type: String, enum: ['under-treatment', 'discharged', 'transferred'], default: 'under-treatment' },
   totalBill: { type: Number, default: 0 },
   notes: { type: String },
   admittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

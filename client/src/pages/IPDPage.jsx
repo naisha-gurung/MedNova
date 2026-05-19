@@ -181,7 +181,7 @@ export default function IPDPage() {
   const [tab, setTab] = useState('patients');
   const [showAdmit, setShowAdmit] = useState(false);
   const [dischargeRecord, setDischargeRecord] = useState(null);
-  const [statusFilter, setStatusFilter] = useState('admitted');
+  const [statusFilter, setStatusFilter] = useState('under-treatment');
 
   const canAdmit = ['admin', 'doctor', 'nurse', 'receptionist'].includes(user?.role);
   const canDischarge = ['admin', 'doctor'].includes(user?.role);
@@ -196,7 +196,7 @@ export default function IPDPage() {
       ]);
       setRecords(ipdRes.data.records);
       setBeds(bedRes.data.beds);
-    } catch { toast.error('Failed to load IPD data'); }
+      } catch (err) { if (!err._toasted) toast.error('Failed to load IPD data'); }
     finally { setLoading(false); }
   }, [statusFilter]);
 
@@ -250,7 +250,7 @@ export default function IPDPage() {
       {tab === 'patients' && (
         <>
           <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-            {['admitted', 'under-treatment', 'discharged'].map(s => (
+{['under-treatment', 'discharged'].map(s => (
               <button key={s} onClick={() => setStatusFilter(s)} className={`btn btn-sm ${statusFilter === s ? 'btn-primary' : 'btn-secondary'}`} style={{ textTransform: 'capitalize' }}>{s.replace('-', ' ')}</button>
             ))}
           </div>
@@ -291,7 +291,8 @@ export default function IPDPage() {
                         <td style={{ maxWidth: '200px', fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.admissionReason}</td>
                         <td style={{ fontSize: '0.82rem' }}>{formatDate(r.admissionDate)}</td>
                         <td>
-                          <span className={`badge badge-${derivedStatus === 'admitted' ? 'primary' : derivedStatus === 'under-treatment' ? 'warning' : 'gray'}`} style={{ textTransform: 'capitalize' }}>
+                          <span className={`badge badge-${derivedStatus === 'under-treatment' ? 'warning' : 'gray'}`}
+                          style={{ textTransform: 'capitalize' }}>
                             {derivedStatus.replace('-', ' ')}
                           </span>
                           {derivedStatus === 'under-treatment' && r.admissionDate && (() => {
